@@ -1,6 +1,0 @@
-{
-  "name": "radar-playwright-python",
-  "image": "mcr.microsoft.com/playwright/python:v1.42.1-jammy",
-  "runArgs": ["--shm-size=1gb"],
-  "remoteUser": "vscode"
-}
