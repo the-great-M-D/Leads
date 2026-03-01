@@ -15,8 +15,5 @@
   },
   "devDependencies": {
     "nodemon": "^2.0.19"
-  },
-  {
-  "image": "mcr.microsoft.com/playwright:v1.42.1-jammy"
-}
+  }
 }
