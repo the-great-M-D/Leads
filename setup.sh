@@ -1,29 +1,27 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status
+# Exit on any error
 set -e
 
-echo "🚀 Starting Playwright Environment Fix..."
-
-# 1. Update keys (using || true here because we expect the initial update to have GPG issues)
-echo "🔑 Refreshing GPG keys..."
+echo "🛠️ Step 1: Fixing GPG Keys and Package Lists..."
+# We use '|| true' because the first update almost always fails on keys in this repo
 sudo apt-get update || true
+sudo apt-get install -y gnupg2
 sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 871920D1991BC93C
 
-# 2. Update and Install System Dependencies
-echo "🛠️ Installing System Dependencies..."
+echo "📥 Step 2: Updating System..."
 sudo apt-get update
-sudo apt-get install -y libgbm1 libnss3 libasound2
+sudo apt-get install -y libgbm1 libnss3 libasound2 libxshmfence1 libglu1
 
-# 3. Install Playwright Python Library
-echo "📦 Installing Playwright Python package..."
-pip install playwright
+echo "🐍 Step 3: Installing Playwright Python Package..."
+# Using 'python3 -m pip' ensures we hit the right environment in this template
+python3 -m pip install --upgrade pip
+python3 -m pip install playwright
 
-# 4. Install Playwright Browsers & their specific dependencies
-echo "🌐 Installing Chromium and final driver dependencies..."
-playwright install-deps chromium
-playwright install chromium
+echo "🌐 Step 4: Installing Browser and System Dependencies..."
+# This is the 'magic' command that fixes the Error 100 once and for all
+python3 -m playwright install-deps chromium
+python3 -m playwright install chromium
 
-echo "--------------------------------------"
-echo "✅ SETUP SUCCESSFUL!"
-echo "--------------------------------------"
+echo ""
+echo "✅ SUCCESS: Playwright is ready to go!"
