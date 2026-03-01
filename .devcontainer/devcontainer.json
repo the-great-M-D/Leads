@@ -1,9 +1,7 @@
 {
   "name": "Playwright Environment",
-  // Use a slim, official Python image
   "image": "mcr.microsoft.com/devcontainers/python:3.11", 
   "features": {
-    // This installs Playwright & browsers separately after the container starts
     "ghcr.io/devcontainers/features/playwright:1": {
       "installBrowsers": true
     }
