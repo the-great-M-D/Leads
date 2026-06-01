@@ -1,0 +1,28 @@
+services:
+  - type: cron
+    name: tree-lead-radar
+    runtime: python
+    buildCommand: bash build.sh
+    schedule: "0 */6 * * *"   # Runs every 6 hours — adjust as needed
+    startCommand: python Radar.py
+    disk:
+      name: radar-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: FB_EMAIL
+        sync: false
+      - key: FB_PASSWORD
+        sync: false
+      - key: DB_PATH
+        value: /data/leads.db
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false          # Your Gmail address
+      - key: SMTP_PASSWORD
+        sync: false          # Gmail App Password (not your login password)
+      - key: NOTIFY_EMAIL
+        sync: false          # Email address to receive lead alerts
