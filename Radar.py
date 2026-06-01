@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-
 import asyncio
 import json
 import os
 import random
+import smtplib
+import sqlite3
 import sys
 from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from playwright.async_api import async_playwright, TimeoutError
 
-SEEN_FILE = "seen_posts.json"
 STATE_FILE = "storage_state.json"
 SCREENSHOT_DIR = "debug_screens"
+DB_FILE = os.environ.get("DB_PATH", "leads.db")
+
+# Email config — set these in Render environment variables
+SMTP_HOST     = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT     = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER     = os.environ.get("SMTP_USER")      # your Gmail address
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")  # Gmail App Password
+NOTIFY_EMAIL  = os.environ.get("NOTIFY_EMAIL")   # where to send lead alerts
 
 GROUP_IDS = [
     "960191220672227",
@@ -31,22 +41,96 @@ KEYWORDS = [
     "stump"
 ]
 
+# ── Email ─────────────────────────────────────────────────────────────────────
+
+def send_lead_email(url, keyword):
+    if not all([SMTP_USER, SMTP_PASSWORD, NOTIFY_EMAIL]):
+        log("Email not configured — skipping notification.")
+        return
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"🌳 New Tree Lead: {keyword}"
+        msg["From"]    = SMTP_USER
+        msg["To"]      = NOTIFY_EMAIL
+
+        text = f"New lead found!\n\nKeyword: {keyword}\nPost: {url}\nFound at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        html = f"""
+        <html><body style="font-family:sans-serif;padding:20px;">
+          <h2 style="color:#2d6a4f;">🌳 New Tree Lead Found</h2>
+          <table style="border-collapse:collapse;width:100%;max-width:500px;">
+            <tr>
+              <td style="padding:8px;font-weight:bold;color:#555;">Keyword</td>
+              <td style="padding:8px;">{keyword}</td>
+            </tr>
+            <tr style="background:#f4f4f4;">
+              <td style="padding:8px;font-weight:bold;color:#555;">Post</td>
+              <td style="padding:8px;"><a href="{url}" style="color:#1a73e8;">{url}</a></td>
+            </tr>
+            <tr>
+              <td style="padding:8px;font-weight:bold;color:#555;">Found at</td>
+              <td style="padding:8px;">{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</td>
+            </tr>
+          </table>
+          <p style="margin-top:20px;color:#888;font-size:12px;">Sent by Tree Lead Radar</p>
+        </body></html>
+        """
+
+        msg.attach(MIMEText(text, "plain"))
+        msg.attach(MIMEText(html, "html"))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, NOTIFY_EMAIL, msg.as_string())
+
+        log(f"📧 Email sent to {NOTIFY_EMAIL}")
+
+    except Exception as e:
+        log(f"Failed to send email: {e}")
+
+# ── Database ──────────────────────────────────────────────────────────────────
+
+def init_db():
+    con = sqlite3.connect(DB_FILE)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS seen_posts (
+            url TEXT PRIMARY KEY,
+            first_seen TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS leads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            keyword TEXT NOT NULL,
+            found_at TEXT NOT NULL
+        )
+    """)
+    con.commit()
+    return con
+
+def is_seen(con, url):
+    return con.execute("SELECT 1 FROM seen_posts WHERE url = ?", (url,)).fetchone() is not None
+
+def mark_seen(con, url):
+    con.execute(
+        "INSERT OR IGNORE INTO seen_posts (url, first_seen) VALUES (?, ?)",
+        (url, datetime.now().isoformat())
+    )
+    con.commit()
+
+def save_lead(con, url, keyword):
+    con.execute(
+        "INSERT INTO leads (url, keyword, found_at) VALUES (?, ?, ?)",
+        (url, keyword, datetime.now().isoformat())
+    )
+    con.commit()
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-
-
-def load_seen():
-    if not os.path.exists(SEEN_FILE):
-        return set()
-    with open(SEEN_FILE, "r") as f:
-        return set(json.load(f))
-
-
-def save_seen(seen):
-    with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen), f)
-
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 async def safe_goto(page, url):
     try:
@@ -62,7 +146,6 @@ async def safe_goto(page, url):
         return False
     return True
 
-
 async def save_debug(page):
     if not os.path.exists(SCREENSHOT_DIR):
         os.makedirs(SCREENSHOT_DIR)
@@ -70,6 +153,7 @@ async def save_debug(page):
     await page.screenshot(path=filename)
     log(f"Saved debug screenshot: {filename}")
 
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 async def login_if_needed(context, page):
     if os.path.exists(STATE_FILE):
@@ -77,8 +161,7 @@ async def login_if_needed(context, page):
         return
 
     log("Login required.")
-
-    email = os.environ.get("FB_EMAIL")
+    email    = os.environ.get("FB_EMAIL")
     password = os.environ.get("FB_PASSWORD")
 
     if not email or not password:
@@ -108,11 +191,11 @@ async def login_if_needed(context, page):
     await context.storage_state(path=STATE_FILE)
     log("Login successful and saved.")
 
+# ── Scanner ───────────────────────────────────────────────────────────────────
 
-async def scan_group(page, group_id, seen):
+async def scan_group(page, group_id, con):
     url = f"https://www.facebook.com/groups/{group_id}"
     log(f"Scanning Group {group_id}")
-
     ok = await safe_goto(page, url)
     if not ok:
         return
@@ -136,55 +219,66 @@ async def scan_group(page, group_id, seen):
     log(f"Found {len(links)} potential posts.")
 
     for link in links:
-        if link in seen:
+        if is_seen(con, link):
             continue
 
-        post_page = await page.context.new_page()
+        mark_seen(con, link)
 
+        post_page = await page.context.new_page()
         ok = await safe_goto(post_page, link)
         if not ok:
             await post_page.close()
             continue
 
         content = (await post_page.content()).lower()
-
         for keyword in KEYWORDS:
             if keyword in content:
                 log("🚨 LEAD FOUND 🚨")
                 log(f"Keyword: {keyword}")
                 log(f"Post: {link}")
                 log("-" * 40)
-                seen.add(link)
-                save_seen(seen)
+                save_lead(con, link, keyword)
+                send_lead_email(link, keyword)
                 break
 
         await post_page.close()
         await asyncio.sleep(random.uniform(2, 4))
 
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 async def main():
-    seen = load_seen()
+    con = init_db()
+    log(f"Database: {DB_FILE}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--no-zygote",
+                "--single-process",
+            ]
+        )
         context = await browser.new_context(
             storage_state=STATE_FILE if os.path.exists(STATE_FILE) else None
         )
         page = await context.new_page()
-
         await login_if_needed(context, page)
 
         log("Tree Lead Radar Running...")
         log("=" * 40)
 
         for group_id in GROUP_IDS:
-            await scan_group(page, group_id, seen)
+            await scan_group(page, group_id, con)
             await asyncio.sleep(random.uniform(5, 8))
 
         await browser.close()
 
+    con.close()
     log("Scan complete.")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
