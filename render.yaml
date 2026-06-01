@@ -1,9 +1,10 @@
 services:
+  # ── Main scanner — runs every 6 hours ─────────────────────────────────────
   - type: cron
     name: tree-lead-radar
     runtime: python
     buildCommand: bash build.sh
-    schedule: "0 */6 * * *"   # Runs every 6 hours — adjust as needed
+    schedule: "0 */6 * * *"
     startCommand: python Radar.py
     disk:
       name: radar-data
@@ -21,8 +22,33 @@ services:
       - key: SMTP_PORT
         value: "587"
       - key: SMTP_USER
-        sync: false          # Your Gmail address
+        sync: false
       - key: SMTP_PASSWORD
-        sync: false          # Gmail App Password (not your login password)
+        sync: false
       - key: NOTIFY_EMAIL
-        sync: false          # Email address to receive lead alerts
+        sync: false
+
+  # ── Daily summary email — 7am SAST (05:00 UTC) ────────────────────────────
+  - type: cron
+    name: tree-lead-daily-summary
+    runtime: python
+    buildCommand: bash build.sh
+    schedule: "0 5 * * *"
+    startCommand: python daily_summary.py
+    disk:
+      name: radar-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DB_PATH
+        value: /data/leads.db
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: NOTIFY_EMAIL
+        sync: false
